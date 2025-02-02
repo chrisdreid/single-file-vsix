@@ -4,6 +4,7 @@ import { exec, ExecException } from 'child_process';
 
 /**
  * Data shape for global defaults (stored in globalState).
+ * - Per-user or machine (not project specific).
  */
 interface SingleFileGlobalDefaults {
   singleFileRoot: string;   // Path to SingleFile (file or folder)
@@ -12,9 +13,33 @@ interface SingleFileGlobalDefaults {
 }
 
 /**
+ * Data shape for per-project "Run" settings (stored in workspaceState).
+ * These values are "sticky" within the current workspace.
+ */
+interface SingleFileWorkspaceState {
+  outputFile: string;
+  paths: string[];
+  config: string;
+  extensions: string[];
+  excludeExtensions: string[];
+  ignoreErrors: boolean;
+  replaceInvalidChars: boolean;
+  formats: string;
+  forceBinaryContent: boolean;
+  metadataAdd: string[];
+  metadataRemove: string[];
+  excludeDirs: string[];
+  excludeFiles: string[];
+  includeDirs: string[];
+  includeFiles: string[];
+  disablePlugin: string[];
+  depth: string;
+}
+
+/**
  * Return an initial fallback if no global defaults are stored.
  */
-function getFallbackDefaults(): SingleFileGlobalDefaults {
+function getFallbackGlobalDefaults(): SingleFileGlobalDefaults {
   return {
     singleFileRoot: '',
     configRoots: [],
@@ -28,7 +53,7 @@ function getFallbackDefaults(): SingleFileGlobalDefaults {
 function getGlobalDefaults(context: vscode.ExtensionContext): SingleFileGlobalDefaults {
   return context.globalState.get<SingleFileGlobalDefaults>(
     'singlefileGlobalDefaults',
-    getFallbackDefaults()
+    getFallbackGlobalDefaults()
   );
 }
 
@@ -37,6 +62,51 @@ function getGlobalDefaults(context: vscode.ExtensionContext): SingleFileGlobalDe
  */
 async function setGlobalDefaults(context: vscode.ExtensionContext, data: SingleFileGlobalDefaults) {
   await context.globalState.update('singlefileGlobalDefaults', data);
+}
+
+/**
+ * Return fallback workspace-level defaults if nothing is stored yet.
+ */
+function getFallbackWorkspaceState(): SingleFileWorkspaceState {
+  return {
+    outputFile: '',
+    paths: [],
+    config: '',
+    extensions: [],
+    excludeExtensions: [],
+    ignoreErrors: false,
+    replaceInvalidChars: false,
+    formats: '',
+    forceBinaryContent: false,
+    metadataAdd: [],
+    metadataRemove: [],
+    excludeDirs: [],
+    excludeFiles: [],
+    includeDirs: [],
+    includeFiles: [],
+    disablePlugin: [],
+    depth: ''
+  };
+}
+
+/**
+ * Retrieve the user's last-used "Run" settings from workspaceState.
+ */
+function getWorkspaceDefaults(context: vscode.ExtensionContext): SingleFileWorkspaceState {
+  return context.workspaceState.get<SingleFileWorkspaceState>(
+    'singlefileWorkspaceDefaults',
+    getFallbackWorkspaceState()
+  );
+}
+
+/**
+ * Save "Run" settings back into workspaceState so they persist per-project.
+ */
+async function setWorkspaceDefaults(
+  context: vscode.ExtensionContext,
+  data: SingleFileWorkspaceState
+) {
+  await context.workspaceState.update('singlefileWorkspaceDefaults', data);
 }
 
 /**
@@ -56,6 +126,54 @@ async function fetchPyenvVersions(): Promise<string[]> {
         .map(line => line.trim())
         .filter(line => line.length > 0);
       resolve(versions);
+    });
+  });
+}
+
+/**
+ * Query single-file for available formats and configs.
+ * E.g. `python single-file --query formats configs`
+ */
+async function fetchQueryData(
+  globals: SingleFileGlobalDefaults
+): Promise<{ formats: Record<string, any>; configs: Array<{ path: string; file: string }> }> {
+  return new Promise((resolve) => {
+    // Construct command using the same approach for pyenvVersion and singleFileRoot
+    let singleFileExe: string;
+    if (!globals.singleFileRoot) {
+      // fallback to just "single-file" on PATH
+      singleFileExe = 'single-file';
+    } else {
+      // user might have set it to a file or folder
+      if (globals.singleFileRoot.endsWith('single-file')) {
+        singleFileExe = `"${globals.singleFileRoot}"`;
+      } else {
+        singleFileExe = `"${path.join(globals.singleFileRoot, 'single-file')}"`;
+      }
+    }
+
+    let cmd: string;
+    if (globals.pyenvVersion) {
+      cmd = `PYENV_VERSION=${globals.pyenvVersion} python ${singleFileExe} --query formats configs`;
+    } else {
+      cmd = `python ${singleFileExe} --query formats configs`;
+    }
+
+    exec(cmd, (error, stdout) => {
+      if (error) {
+        console.error('Error fetching query data:', error.message);
+        return resolve({ formats: {}, configs: [] });
+      }
+      try {
+        const data = JSON.parse(stdout);
+        resolve({
+          formats: data.formats || {},
+          configs: data.configs || []
+        });
+      } catch (parseErr) {
+        console.error('Error parsing query data:', parseErr);
+        return resolve({ formats: {}, configs: [] });
+      }
     });
   });
 }
@@ -295,19 +413,27 @@ function getGlobalConfigWebviewHTML(
 
 /**
  * Show a webview panel to let the user configure SingleFile arguments
- * and run SingleFile with the selected URIs from the Explorer.
+ * and run SingleFile with the selected URIs from the Explorer (if any).
  */
 async function showSingleFileRunPanel(
   context: vscode.ExtensionContext,
-  selectedUris: vscode.Uri[]
+  selectedUris?: vscode.Uri[]
 ) {
-  // 1) Grab global defaults
+  // 1) Grab global defaults for the SingleFile path/pyenv usage
   const globals = getGlobalDefaults(context);
 
-  // 2) Convert selected URIs to file system paths
-  const selectedPaths = selectedUris.map((u) => u.fsPath);
+  // 2) Load or create workspace defaults for the run fields
+  const wsDefaults = getWorkspaceDefaults(context);
 
-  // 3) Create our webview panel
+  // 3) If the user invoked via right-click on files/folders, override the stored paths
+  if (selectedUris && selectedUris.length > 0) {
+    wsDefaults.paths = selectedUris.map(u => u.fsPath);
+  }
+
+  // 4) Query single-file for available formats and configs
+  const { formats, configs } = await fetchQueryData(globals);
+
+  // 5) Create the panel
   const panel = vscode.window.createWebviewPanel(
     'singlefileRun',
     'Run SingleFile',
@@ -315,10 +441,10 @@ async function showSingleFileRunPanel(
     { enableScripts: true, retainContextWhenHidden: true }
   );
 
-  // 4) Provide HTML for the run panel
-  panel.webview.html = getRunPanelWebviewHTML(globals, selectedPaths);
+  // 6) Provide HTML for the run panel
+  panel.webview.html = getRunPanelWebviewHTML(wsDefaults, formats, configs);
 
-  // 5) Listen for messages from the webview
+  // 7) Listen for messages from the webview
   panel.webview.onDidReceiveMessage(async (message) => {
     switch (message.command) {
       case 'browseAddPath': {
@@ -368,32 +494,25 @@ async function showSingleFileRunPanel(
 
       case 'runSingleFile': {
         // The user clicked the "Run" button in the webview
-        const args = message.data as {
-          outputFile: string;
-          paths: string[];
-          depth: string;
-          extensions: string[];
-          excludeExtensions: string[];
-          ignoreErrors: boolean;
-          replaceInvalidChars: boolean;
+        const args = message.data as SingleFileWorkspaceState;
 
-          // Additional single-file args
-          formats: string;
-          config: string;
-          forceBinaryContent: boolean;
-          metadataAdd: string[];
-          metadataRemove: string[];
-          excludeDirs: string[];
-          excludeFiles: string[];
-          includeDirs: string[];
-          includeFiles: string[];
-          disablePlugin: string[];
-        };
+        // Save the new workspace defaults (sticky for next time).
+        await setWorkspaceDefaults(context, args);
 
         // Actually run SingleFile
         await runSingleFileCLI(context, globals, args);
+
         vscode.window.showInformationMessage('SingleFile run completed.');
         panel.dispose();
+        break;
+      }
+
+      case 'selectKnownConfig': {
+        // The user selected a known config from the dropdown
+        panel.webview.postMessage({
+          command: 'setConfigFile',
+          value: message.path
+        });
         break;
       }
     }
@@ -401,55 +520,20 @@ async function showSingleFileRunPanel(
 }
 
 /**
- * Actually spawns the SingleFile process using your original PYENV logic:
- * 
- *  if (globals.pyenvVersion) {
- *    cmd = `PYENV_VERSION=${globals.pyenvVersion} python ${singleFileExe} ...`;
- *  } else {
- *    cmd = `python ${singleFileExe} ...`;
- *  }
- * 
- * If they've set a `singleFileRoot`, we use that path; otherwise fallback to 'single-file'.
+ * Actually spawns the SingleFile process using your original PYENV logic.
  */
 async function runSingleFileCLI(
   context: vscode.ExtensionContext,
   globals: SingleFileGlobalDefaults,
-  args: {
-    outputFile: string;
-    paths: string[];
-    depth: string;
-    extensions: string[];
-    excludeExtensions: string[];
-    ignoreErrors: boolean;
-    replaceInvalidChars: boolean;
-
-    formats: string;
-    config: string;
-    forceBinaryContent: boolean;
-    metadataAdd: string[];
-    metadataRemove: string[];
-    excludeDirs: string[];
-    excludeFiles: string[];
-    includeDirs: string[];
-    includeFiles: string[];
-    disablePlugin: string[];
-  }
+  args: SingleFileWorkspaceState
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     // 1) Decide on the single-file script to call
-    //    If singleFileRoot is a file, we use that directly.
-    //    If singleFileRoot is a directory, it might contain "single-file".
-    //    If empty, we just call "single-file".
     let singleFileExe: string;
     if (!globals.singleFileRoot) {
       // fallback to just "single-file" on PATH
       singleFileExe = 'single-file';
     } else {
-      // user might have set it to a file or folder
-      // If folder, append "single-file"
-      // If file, use as-is
-      // (If your original code always appended 'single-file', then do so here)
-      // For safety, let's see if singleFileRoot ends with "single-file"
       if (globals.singleFileRoot.endsWith('single-file')) {
         singleFileExe = `"${globals.singleFileRoot}"`;
       } else {
@@ -466,7 +550,9 @@ async function runSingleFileCLI(
     }
 
     // --paths
-    cliArgs.push('--paths', ...args.paths.map((p) => `"${p}"`));
+    if (args.paths && args.paths.length > 0) {
+      cliArgs.push('--paths', ...args.paths.map((p) => `"${p}"`));
+    }
 
     // --depth
     if (args.depth) {
@@ -495,6 +581,7 @@ async function runSingleFileCLI(
 
     // --formats
     if (args.formats) {
+      // user might have typed multiple separated by space or commas
       const cleaned = args.formats.replace(/\s+/g, ',');
       cliArgs.push('--formats', cleaned);
     }
@@ -544,7 +631,7 @@ async function runSingleFileCLI(
       cliArgs.push('--disable-plugin', ...args.disablePlugin);
     }
 
-    // 3) Construct final command (your original PYENV approach)
+    // 3) Construct final command
     let cmd: string;
     if (globals.pyenvVersion) {
       cmd = `PYENV_VERSION=${globals.pyenvVersion} python ${singleFileExe} ${cliArgs.join(' ')}`;
@@ -576,12 +663,40 @@ async function runSingleFileCLI(
 
 /**
  * Build the HTML for the Run Panel webview.
+ * Now includes:
+ *  - A dropdown for known config files
+ *  - A placeholder in the "formats" input derived from the query data
  */
 function getRunPanelWebviewHTML(
-  globals: SingleFileGlobalDefaults,
-  initialPaths: string[]
+  wsDefaults: SingleFileWorkspaceState,
+  formatsData: Record<string, any>,
+  configsData: Array<{ path: string; file: string }>
 ): string {
-  const escapedPaths = JSON.stringify(initialPaths.map(escapeHtml));
+  // Prepare placeholders from the known format keys
+  const formatKeys = Object.keys(formatsData);
+  const formatsPlaceholder = formatKeys.length > 0
+    ? `e.g. ${formatKeys.join(',')}`
+    : 'e.g. default,json,markdown';
+
+  // Pre-fill input fields from wsDefaults
+  const escapedPaths = JSON.stringify(wsDefaults.paths.map(escapeHtml));
+  const escapedOutputFile = escapeHtml(wsDefaults.outputFile);
+  const escapedConfig = escapeHtml(wsDefaults.config);
+  const escapedExtensions = escapeHtml(wsDefaults.extensions.join(','));
+  const escapedExcludeExt = escapeHtml(wsDefaults.excludeExtensions.join(','));
+  const escapedFormats = escapeHtml(wsDefaults.formats);
+  const escapedMetadataAdd = escapeHtml(wsDefaults.metadataAdd.join(','));
+  const escapedMetadataRemove = escapeHtml(wsDefaults.metadataRemove.join(','));
+  const escapedExcludeDirs = escapeHtml(wsDefaults.excludeDirs.join(','));
+  const escapedExcludeFiles = escapeHtml(wsDefaults.excludeFiles.join(','));
+  const escapedIncludeDirs = escapeHtml(wsDefaults.includeDirs.join(','));
+  const escapedIncludeFiles = escapeHtml(wsDefaults.includeFiles.join(','));
+  const escapedDisablePlugins = escapeHtml(wsDefaults.disablePlugin.join(','));
+  const escapedDepth = escapeHtml(wsDefaults.depth);
+
+  // Build the known configs as a JSON array
+  const knownConfigsJson = JSON.stringify(configsData.map(c => ({ path: c.path, file: c.file })));
+
   return /* html */ `
 <!DOCTYPE html>
 <html>
@@ -630,6 +745,11 @@ function getRunPanelWebviewHTML(
     label {
       font-weight: bold;
     }
+    .inline-group {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
   </style>
 </head>
 <body>
@@ -638,8 +758,10 @@ function getRunPanelWebviewHTML(
   <!-- Output File at the top, with a "Browse..." button for showSaveDialog -->
   <div class="row">
     <label>Output File</label><br/>
-    <input type="text" id="outputFileInput" placeholder="e.g. /home/user/out.json"/>
-    <button id="browseOutputFileBtn">Browse...</button>
+    <div class="inline-group">
+      <input type="text" id="outputFileInput" value="${escapedOutputFile}" placeholder="e.g. /home/user/out.json"/>
+      <button id="browseOutputFileBtn">Browse...</button>
+    </div>
   </div>
 
   <div class="row">
@@ -650,82 +772,90 @@ function getRunPanelWebviewHTML(
 
   <div class="row">
     <label>Config</label><br/>
-    <input type="text" id="configInput" placeholder="Path to a JSON config"/>
-    <button id="browseConfigBtn">Browse...</button>
+    <div class="inline-group">
+      <input type="text" id="configInput" value="${escapedConfig}" placeholder="Path to a JSON config"/>
+      <button id="browseConfigBtn">Browse...</button>
+    </div>
+    <div class="inline-group">
+      <label for="knownConfigsSelect">Known Configs:</label>
+      <select id="knownConfigsSelect">
+        <option value="">(None)</option>
+      </select>
+    </div>
   </div>
 
   <div class="row">
     <label>Extensions (space or comma separated)</label><br/>
-    <input type="text" id="extensionsInput" placeholder="e.g. ts, js, json"/>
+    <input type="text" id="extensionsInput" value="${escapedExtensions}" placeholder="e.g. ts, js, json"/>
   </div>
 
   <div class="row">
     <label>Exclude Extensions</label><br/>
-    <input type="text" id="excludeExtensionsInput" placeholder="e.g. lock, exe"/>
+    <input type="text" id="excludeExtensionsInput" value="${escapedExcludeExt}" placeholder="e.g. lock, exe"/>
   </div>
 
   <div class="row">
     <label>Formats</label><br/>
-    <input type="text" id="formatsInput" placeholder="e.g. default,md"/>
+    <input type="text" id="formatsInput" value="${escapedFormats}" placeholder="${formatsPlaceholder}"/>
   </div>
 
   <div class="row">
     <label>Metadata Add (space/comma separated KEY=VALUE pairs)</label><br/>
-    <input type="text" id="metadataAddInput" placeholder="e.g. foo=bar,example=123"/>
+    <input type="text" id="metadataAddInput" value="${escapedMetadataAdd}" placeholder="e.g. foo=bar,example=123"/>
   </div>
 
   <div class="row">
     <label>Metadata Remove (space/comma separated keys)</label><br/>
-    <input type="text" id="metadataRemoveInput" placeholder="e.g. foo, bar"/>
+    <input type="text" id="metadataRemoveInput" value="${escapedMetadataRemove}" placeholder="e.g. foo, bar"/>
   </div>
 
   <div class="row">
     <label>Exclude Dirs</label><br/>
-    <input type="text" id="excludeDirsInput" placeholder="Regex patterns (space/comma)"/>
+    <input type="text" id="excludeDirsInput" value="${escapedExcludeDirs}" placeholder="Regex patterns (space/comma)"/>
   </div>
 
   <div class="row">
     <label>Exclude Files</label><br/>
-    <input type="text" id="excludeFilesInput" placeholder="Regex patterns (space/comma)"/>
+    <input type="text" id="excludeFilesInput" value="${escapedExcludeFiles}" placeholder="Regex patterns (space/comma)"/>
   </div>
 
   <div class="row">
     <label>Include Dirs</label><br/>
-    <input type="text" id="includeDirsInput" placeholder="Regex patterns (space/comma)"/>
+    <input type="text" id="includeDirsInput" value="${escapedIncludeDirs}" placeholder="Regex patterns (space/comma)"/>
   </div>
 
   <div class="row">
     <label>Include Files</label><br/>
-    <input type="text" id="includeFilesInput" placeholder="Regex patterns (space/comma)"/>
+    <input type="text" id="includeFilesInput" value="${escapedIncludeFiles}" placeholder="Regex patterns (space/comma)"/>
   </div>
 
   <div class="row">
     <label>Disable Plugin</label><br/>
-    <input type="text" id="disablePluginInput" placeholder="space/comma separated plugin names"/>
+    <input type="text" id="disablePluginInput" value="${escapedDisablePlugins}" placeholder="space/comma separated plugin names"/>
   </div>
 
   <div class="row">
     <label>Depth</label><br/>
-    <input type="text" id="depthInput" placeholder="0 = unlimited (default)"/>
+    <input type="text" id="depthInput" value="${escapedDepth}" placeholder="0 = unlimited (default)"/>
   </div>
 
   <div class="row">
     <label>Force Binary Content</label><br/>
-    <input type="checkbox" id="forceBinaryCheck"/>
+    <input type="checkbox" id="forceBinaryCheck" ${wsDefaults.forceBinaryContent ? 'checked' : ''}/>
   </div>
 
   <div class="row">
     <label>Flags</label><br/>
-    <input type="checkbox" id="ignoreErrorsCheck"/> Ignore Errors<br/>
-    <input type="checkbox" id="replaceInvalidCheck"/> Replace Invalid Chars<br/>
+    <input type="checkbox" id="ignoreErrorsCheck" ${wsDefaults.ignoreErrors ? 'checked' : ''}/> Ignore Errors<br/>
+    <input type="checkbox" id="replaceInvalidCheck" ${wsDefaults.replaceInvalidChars ? 'checked' : ''}/> Replace Invalid Chars<br/>
   </div>
-
 
   <button id="runBtn">Run</button>
 
   <script>
     const vscode = acquireVsCodeApi();
     let paths = ${escapedPaths};
+    const knownConfigs = ${knownConfigsJson};
 
     function renderPathsList() {
       const container = document.getElementById('pathsList');
@@ -747,6 +877,23 @@ function getRunPanelWebviewHTML(
       });
     }
     renderPathsList();
+
+    // Populate known configs in the dropdown
+    const knownConfigsSelect = document.getElementById('knownConfigsSelect');
+    knownConfigs.forEach(cfg => {
+      const opt = document.createElement('option');
+      opt.value = cfg.path;
+      opt.textContent = cfg.file;
+      knownConfigsSelect.appendChild(opt);
+    });
+
+    knownConfigsSelect.addEventListener('change', () => {
+      const selectedVal = knownConfigsSelect.value;
+      vscode.postMessage({
+        command: 'selectKnownConfig',
+        path: selectedVal
+      });
+    });
 
     // Browse for paths
     document.getElementById('browsePathBtn').addEventListener('click', () => {
@@ -776,7 +923,6 @@ function getRunPanelWebviewHTML(
       const ignoreErrors = document.getElementById('ignoreErrorsCheck').checked;
       const replaceInvalidChars = document.getElementById('replaceInvalidCheck').checked;
 
-      // Additional args
       const formatsVal = document.getElementById('formatsInput').value.trim();
       const configVal = document.getElementById('configInput').value.trim();
       const forceBinary = document.getElementById('forceBinaryCheck').checked;
@@ -807,14 +953,12 @@ function getRunPanelWebviewHTML(
         data: {
           outputFile,
           paths,
-          depth: depthVal,
+          config: configVal,
           extensions: exts,
           excludeExtensions: excludeExts,
           ignoreErrors,
           replaceInvalidChars,
-
           formats: formatsVal,
-          config: configVal,
           forceBinaryContent: forceBinary,
           metadataAdd,
           metadataRemove,
@@ -822,7 +966,8 @@ function getRunPanelWebviewHTML(
           excludeFiles,
           includeDirs,
           includeFiles,
-          disablePlugin
+          disablePlugin,
+          depth: depthVal
         }
       });
     });
@@ -859,7 +1004,6 @@ function escapeHtml(str: string): string {
 
 /**
  * The main entry point for your extension's activation.
- * We register both commands: configureGlobalDefaults & runSingleFile.
  */
 export function activate(context: vscode.ExtensionContext) {
   // 1) Command: singlefile.configureGlobalDefaults
@@ -872,12 +1016,20 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(cmdConfig);
 
   // 2) Command: singlefile.run
+  //    - If invoked from Explorer context menu with multiple selected items, the “uris” param is an array.
+  //    - If invoked from Command Palette (or with no selection), we pass undefined or a single URI.
   const cmdRun = vscode.commands.registerCommand(
     'singlefile.run',
     (uri: vscode.Uri, uris: vscode.Uri[]) => {
-      // Handle multi-select if provided
-      const selectedUris = uris && uris.length > 0 ? uris : [uri];
-      showSingleFileRunPanel(context, selectedUris);
+      // If we have multiple selected URIs, use them; otherwise if there's a single one, use that; 
+      // or if none, pass undefined so we keep the last used paths from workspaceState.
+      let selected: vscode.Uri[] | undefined;
+      if (uris && uris.length > 0) {
+        selected = uris;
+      } else if (uri) {
+        selected = [uri];
+      }
+      showSingleFileRunPanel(context, selected);
     }
   );
   context.subscriptions.push(cmdRun);
