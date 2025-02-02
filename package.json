@@ -1,0 +1,50 @@
+{
+  "name": "single-file-vsix",
+  "displayName": "SingleFile",
+  "description": "Flattens codebases using the Single File tool with full argument selection and pyenv support.",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "singlefile.run", "title": "Run SingleFile" },
+      { "command": "singlefile.configureGlobalDefaults", "title": "Configure SingleFile Global Defaults" }
+    ],
+    "menus": {
+      "commandPalette": [
+        { "command": "singlefile.run" },
+        { "command": "singlefile.configureGlobalDefaults" }
+      ],
+      "explorer/context": [
+        {
+          "command": "singlefile.run",
+          "group": "navigation",
+          "when": "explorerResourceIsFolder || resourceFilename"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.96.0",
+    "@types/node": "20.x",
+    "typescript": "^5.7.2",
+    "eslint": "^9.16.0",
+    "@typescript-eslint/eslint-plugin": "^8.17.0",
+    "@typescript-eslint/parser": "^8.17.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.1"
+  }
+}
