@@ -3,16 +3,20 @@
 
 # Single-File VSCode Extension
 
-**Flatten and analyze your codebases directly from Visual Studio Code**, using the powerful [Single-File CLI](https://github.com/chrisdreid/single-file) under the hood. This extension provides a user-friendly interface to configure paths, arguments, metadata options, pyenv versions, and more—right inside VS Code.
+**Transform your codebase into LLM-friendly formats directly from Visual Studio Code.** This extension leverages [Single-File CLI](https://github.com/chrisdreid/single-file) under the hood to create optimized, context-aware representations of your code that are perfect for AI analysis and prompting. This extension provides a user-friendly interface to configure paths, arguments, metadata options, pyenv versions, and more—right inside VS Code.
 
+### LLM Tuned - Smart Context Preservation
+- Automatically maintains crucial relationships between files and dependencies.
+- Preserves import hierarchies and module structures.
+- Includes relevant metadata and hints that help LLMs understand your code better.
 <br>
 
 ## Features
 
 - **Global Defaults**: Configure your Single-File path, optional Pyenv version, and any additional config root paths.  
 - **Run Dialog**: Right-click folders/files (or use the command palette) to open a Run panel where you can:
-  - Select arguments like paths, output, formats, etc.
-  - Save these arguments as a reusable JSON config.
+  - Adjust arguments like paths, output, formats, configs and more.
+  - Quickly Export these arguments as a reusable JSON config.
 - **Sticky Workspace Settings**: The last used arguments are saved per-project so you don’t have to re-enter them.  
 - **Auto-Configuration Prompt**: If you haven’t set up Single-File yet, the extension will prompt you to configure it globally on first use.  
 - **Run “Last Settings”**: Quickly re-run Single-File with your most recent arguments—no dialog required.  
@@ -73,7 +77,7 @@ If you want a custom Single-File root or a specific Python version (via pyenv):
 
 - **Pull Requests** are welcome!  
 - For major changes, please open an issue first to discuss your proposed modifications.  
-- Refer to the [main Single-File project](https://github.com/chrisdreid/single-file) for the CLI codebase, plugin development, and advanced usage examples.
+- Refer to the [ Single-File on GitHub](https://github.com/chrisdreid/single-file) for the CLI codebase, plugin development, and advanced usage examples.
 
 <br>
 
@@ -93,16 +97,3 @@ To dive deeper:
 
 This extension is provided under the **MIT License**, the same as the [Single-File CLI](https://github.com/chrisdreid/single-file/blob/main/LICENSE).  
 Feel free to modify and distribute—credit is welcome but not required.
-
-<br>
-
----
-
-### Publishing & Images
-
-- See [**extension-publishing.md**](./extension-publishing.md) to learn how to publish the extension to the VS Code Marketplace.
-- See [**extension-images.md**](./extension-images.md) for tips on including and referencing images (like the banner above).
-
-<br>
-
-**Happy flattening!**
