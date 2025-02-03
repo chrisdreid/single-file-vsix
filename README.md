@@ -32,6 +32,10 @@
 
 <br>
 
+## Limitations 
+
+1. **Cursor.ai** Context menus are not working. So use **[CTRL+SHFT + P]** to launch.
+
 ## Installation
 
 1. **Install** or **Enable** the extension (from the VS Code Marketplace or by manual `.vsix` file).
