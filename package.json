@@ -1,8 +1,8 @@
 {
   "name": "single-file-vsix",
-  "displayName": "SingleFile",
+  "displayName": "Single-File",
   "description": "Flattens codebases using the Single File tool with full argument selection and pyenv support.",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "engines": {
     "vscode": "^1.96.0"
   },
@@ -12,8 +12,8 @@
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
-      { "command": "singlefile.run", "title": "Run SingleFile" },
-      { "command": "singlefile.configureGlobalDefaults", "title": "Configure SingleFile Global Defaults" }
+      { "command": "singlefile.run", "title": "Run Single-File" },
+      { "command": "singlefile.configureGlobalDefaults", "title": "Configure Single-File Global Defaults" }
     ],
     "menus": {
       "commandPalette": [
