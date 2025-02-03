@@ -1,13 +1,12 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import * as fs from 'fs';
 import { exec, ExecException } from 'child_process';
 
 /**
  * Data shape for global defaults (stored in globalState).
  */
 interface SingleFileGlobalDefaults {
-  singleFileRoot: string;   // Path to SingleFile
+  singleFileRoot: string;   // Path to SingleFile (file or folder)
   configRoots: string[];    // Additional config directories
   pyenvVersion: string;     // e.g. "3.10.5" or "" if none
 }
@@ -86,11 +85,11 @@ async function showGlobalConfigPanel(context: vscode.ExtensionContext) {
   panel.webview.onDidReceiveMessage(async (msg) => {
     switch (msg.command) {
       case 'browseRoot': {
-        // Example: let user pick a directory
+        // Let user pick a directory or file for singleFileRoot
         const chosen = await vscode.window.showOpenDialog({
           canSelectMany: false,
           canSelectFolders: true,
-          canSelectFiles: false
+          canSelectFiles: true
         });
         if (chosen && chosen.length > 0) {
           panel.webview.postMessage({
@@ -195,7 +194,7 @@ function getGlobalConfigWebviewHTML(
   <h2>SingleFile Global Defaults</h2>
   
   <div class="row">
-    <label><strong>SingleFile Root Directory</strong></label><br/>
+    <label><strong>SingleFile Root (file or folder)</strong></label><br/>
     <input type="text" id="singleFileRoot" value="${escapeHtml(current.singleFileRoot)}" />
     <button id="browseRootBtn">Browse...</button>
   </div>
@@ -337,16 +336,58 @@ async function showSingleFileRunPanel(
         break;
       }
 
+      case 'browseOutputFile': {
+        // Let user pick (or create) an output file
+        const chosen = await vscode.window.showSaveDialog({
+          filters: { 'JSON Files': ['json'], All: ['*'] }
+        });
+        if (chosen) {
+          panel.webview.postMessage({
+            command: 'setOutputFile',
+            value: chosen.fsPath
+          });
+        }
+        break;
+      }
+
+      case 'browseConfigFile': {
+        // Let user pick a config file
+        const chosen = await vscode.window.showOpenDialog({
+          canSelectMany: false,
+          canSelectFiles: true,
+          canSelectFolders: false
+        });
+        if (chosen && chosen.length > 0) {
+          panel.webview.postMessage({
+            command: 'setConfigFile',
+            value: chosen[0].fsPath
+          });
+        }
+        break;
+      }
+
       case 'runSingleFile': {
         // The user clicked the "Run" button in the webview
         const args = message.data as {
+          outputFile: string;
           paths: string[];
           depth: string;
-          outputFile: string;
           extensions: string[];
           excludeExtensions: string[];
           ignoreErrors: boolean;
           replaceInvalidChars: boolean;
+
+          // Additional single-file args
+          formats: string;
+          config: string;
+          forceBinaryContent: boolean;
+          metadataAdd: string[];
+          metadataRemove: string[];
+          excludeDirs: string[];
+          excludeFiles: string[];
+          includeDirs: string[];
+          includeFiles: string[];
+          disablePlugin: string[];
         };
 
         // Actually run SingleFile
@@ -360,30 +401,69 @@ async function showSingleFileRunPanel(
 }
 
 /**
- * Actually spawns the SingleFile process using the user's chosen arguments.
- * Respects pyenvVersion if set, by calling "pyenv exec python".
+ * Actually spawns the SingleFile process using your original PYENV logic:
+ * 
+ *  if (globals.pyenvVersion) {
+ *    cmd = `PYENV_VERSION=${globals.pyenvVersion} python ${singleFileExe} ...`;
+ *  } else {
+ *    cmd = `python ${singleFileExe} ...`;
+ *  }
+ * 
+ * If they've set a `singleFileRoot`, we use that path; otherwise fallback to 'single-file'.
  */
 async function runSingleFileCLI(
   context: vscode.ExtensionContext,
   globals: SingleFileGlobalDefaults,
   args: {
+    outputFile: string;
     paths: string[];
     depth: string;
-    outputFile: string;
     extensions: string[];
     excludeExtensions: string[];
     ignoreErrors: boolean;
     replaceInvalidChars: boolean;
+
+    formats: string;
+    config: string;
+    forceBinaryContent: boolean;
+    metadataAdd: string[];
+    metadataRemove: string[];
+    excludeDirs: string[];
+    excludeFiles: string[];
+    includeDirs: string[];
+    includeFiles: string[];
+    disablePlugin: string[];
   }
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    // Choose which python to invoke
-    const pythonBin = globals.pyenvVersion
-      ? `PYENV_VERSION=${globals.pyenvVersion} python`
-      : 'python'; // or 'python3' depending on your system
+    // 1) Decide on the single-file script to call
+    //    If singleFileRoot is a file, we use that directly.
+    //    If singleFileRoot is a directory, it might contain "single-file".
+    //    If empty, we just call "single-file".
+    let singleFileExe: string;
+    if (!globals.singleFileRoot) {
+      // fallback to just "single-file" on PATH
+      singleFileExe = 'single-file';
+    } else {
+      // user might have set it to a file or folder
+      // If folder, append "single-file"
+      // If file, use as-is
+      // (If your original code always appended 'single-file', then do so here)
+      // For safety, let's see if singleFileRoot ends with "single-file"
+      if (globals.singleFileRoot.endsWith('single-file')) {
+        singleFileExe = `"${globals.singleFileRoot}"`;
+      } else {
+        singleFileExe = `"${path.join(globals.singleFileRoot, 'single-file')}"`;
+      }
+    }
 
-    // Build CLI arguments
+    // 2) Build CLI arguments
     const cliArgs: string[] = [];
+
+    // --output-file
+    if (args.outputFile) {
+      cliArgs.push('--output-file', `"${args.outputFile}"`);
+    }
 
     // --paths
     cliArgs.push('--paths', ...args.paths.map((p) => `"${p}"`));
@@ -391,11 +471,6 @@ async function runSingleFileCLI(
     // --depth
     if (args.depth) {
       cliArgs.push('--depth', args.depth);
-    }
-
-    // --output-file
-    if (args.outputFile) {
-      cliArgs.push('--output-file', `"${args.outputFile}"`);
     }
 
     // --extensions
@@ -418,21 +493,74 @@ async function runSingleFileCLI(
       cliArgs.push('--replace-invalid-chars');
     }
 
-    // SingleFile executable (assumes single-file is in singleFileRoot or on PATH)
-    const singleFileExe = globals.singleFileRoot
-      ? `"${globals.singleFileRoot}"`
-      : 'single-file';
+    // --formats
+    if (args.formats) {
+      const cleaned = args.formats.replace(/\s+/g, ',');
+      cliArgs.push('--formats', cleaned);
+    }
 
-    // Final command
-    const cmd = `${pythonBin} ${singleFileExe} ${cliArgs.join(' ')}`;
-    console.log('Running SingleFile command:', cmd);
+    // --config
+    if (args.config) {
+      cliArgs.push('--config', `"${args.config}"`);
+    }
 
-    // Create an output channel to show logs
+    // --force-binary-content
+    if (args.forceBinaryContent) {
+      cliArgs.push('--force-binary-content');
+    }
+
+    // --metadata-add
+    if (args.metadataAdd && args.metadataAdd.length > 0) {
+      cliArgs.push('--metadata-add', ...args.metadataAdd);
+    }
+
+    // --metadata-remove
+    if (args.metadataRemove && args.metadataRemove.length > 0) {
+      cliArgs.push('--metadata-remove', ...args.metadataRemove);
+    }
+
+    // --exclude-dirs
+    if (args.excludeDirs && args.excludeDirs.length > 0) {
+      cliArgs.push('--exclude-dirs', ...args.excludeDirs);
+    }
+
+    // --exclude-files
+    if (args.excludeFiles && args.excludeFiles.length > 0) {
+      cliArgs.push('--exclude-files', ...args.excludeFiles);
+    }
+
+    // --include-dirs
+    if (args.includeDirs && args.includeDirs.length > 0) {
+      cliArgs.push('--include-dirs', ...args.includeDirs);
+    }
+
+    // --include-files
+    if (args.includeFiles && args.includeFiles.length > 0) {
+      cliArgs.push('--include-files', ...args.includeFiles);
+    }
+
+    // --disable-plugin
+    if (args.disablePlugin && args.disablePlugin.length > 0) {
+      cliArgs.push('--disable-plugin', ...args.disablePlugin);
+    }
+
+    // 3) Construct final command (your original PYENV approach)
+    let cmd: string;
+    if (globals.pyenvVersion) {
+      cmd = `PYENV_VERSION=${globals.pyenvVersion} python ${singleFileExe} ${cliArgs.join(' ')}`;
+    } else {
+      cmd = `python ${singleFileExe} ${cliArgs.join(' ')}`;
+    }
+
+    console.log('CMD:', cmd);
+
+    // 4) Output channel for logs
     const singleFileChannel = vscode.window.createOutputChannel('SingleFile');
     singleFileChannel.clear();
     singleFileChannel.show(true);
     singleFileChannel.appendLine(`CMD: ${cmd}`);
 
+    // 5) Execute
     exec(cmd, (error, stdout, stderr) => {
       if (stdout) singleFileChannel.appendLine(stdout);
       if (stderr) singleFileChannel.appendLine(stderr);
@@ -507,6 +635,13 @@ function getRunPanelWebviewHTML(
 <body>
   <h2>Run SingleFile</h2>
 
+  <!-- Output File at the top, with a "Browse..." button for showSaveDialog -->
+  <div class="row">
+    <label>Output File</label><br/>
+    <input type="text" id="outputFileInput" placeholder="e.g. /home/user/out.json"/>
+    <button id="browseOutputFileBtn">Browse...</button>
+  </div>
+
   <div class="row">
     <label>Paths</label><br/>
     <div id="pathsList"></div>
@@ -514,13 +649,9 @@ function getRunPanelWebviewHTML(
   </div>
 
   <div class="row">
-    <label>Depth</label><br/>
-    <input type="text" id="depthInput" placeholder="0 = unlimited (default)"/>
-  </div>
-
-  <div class="row">
-    <label>Output File</label><br/>
-    <input type="text" id="outputFileInput" placeholder="e.g. /home/user/out.json"/>
+    <label>Config</label><br/>
+    <input type="text" id="configInput" placeholder="Path to a JSON config"/>
+    <button id="browseConfigBtn">Browse...</button>
   </div>
 
   <div class="row">
@@ -534,10 +665,61 @@ function getRunPanelWebviewHTML(
   </div>
 
   <div class="row">
+    <label>Formats</label><br/>
+    <input type="text" id="formatsInput" placeholder="e.g. default,md"/>
+  </div>
+
+  <div class="row">
+    <label>Metadata Add (space/comma separated KEY=VALUE pairs)</label><br/>
+    <input type="text" id="metadataAddInput" placeholder="e.g. foo=bar,example=123"/>
+  </div>
+
+  <div class="row">
+    <label>Metadata Remove (space/comma separated keys)</label><br/>
+    <input type="text" id="metadataRemoveInput" placeholder="e.g. foo, bar"/>
+  </div>
+
+  <div class="row">
+    <label>Exclude Dirs</label><br/>
+    <input type="text" id="excludeDirsInput" placeholder="Regex patterns (space/comma)"/>
+  </div>
+
+  <div class="row">
+    <label>Exclude Files</label><br/>
+    <input type="text" id="excludeFilesInput" placeholder="Regex patterns (space/comma)"/>
+  </div>
+
+  <div class="row">
+    <label>Include Dirs</label><br/>
+    <input type="text" id="includeDirsInput" placeholder="Regex patterns (space/comma)"/>
+  </div>
+
+  <div class="row">
+    <label>Include Files</label><br/>
+    <input type="text" id="includeFilesInput" placeholder="Regex patterns (space/comma)"/>
+  </div>
+
+  <div class="row">
+    <label>Disable Plugin</label><br/>
+    <input type="text" id="disablePluginInput" placeholder="space/comma separated plugin names"/>
+  </div>
+
+  <div class="row">
+    <label>Depth</label><br/>
+    <input type="text" id="depthInput" placeholder="0 = unlimited (default)"/>
+  </div>
+
+  <div class="row">
+    <label>Force Binary Content</label><br/>
+    <input type="checkbox" id="forceBinaryCheck"/>
+  </div>
+
+  <div class="row">
     <label>Flags</label><br/>
     <input type="checkbox" id="ignoreErrorsCheck"/> Ignore Errors<br/>
-    <input type="checkbox" id="replaceInvalidCheck"/> Replace Invalid Chars
+    <input type="checkbox" id="replaceInvalidCheck"/> Replace Invalid Chars<br/>
   </div>
+
 
   <button id="runBtn">Run</button>
 
@@ -566,15 +748,25 @@ function getRunPanelWebviewHTML(
     }
     renderPathsList();
 
+    // Browse for paths
     document.getElementById('browsePathBtn').addEventListener('click', () => {
       vscode.postMessage({ command: 'browseAddPath' });
     });
 
-    document.getElementById('runBtn').addEventListener('click', () => {
-      const depthVal = document.getElementById('depthInput').value.trim();
-      const outputFile = document.getElementById('outputFileInput').value.trim();
+    // Browse for output file
+    document.getElementById('browseOutputFileBtn').addEventListener('click', () => {
+      vscode.postMessage({ command: 'browseOutputFile' });
+    });
 
-      // For multiple items, user can type in comma or space separated
+    // Browse for config file
+    document.getElementById('browseConfigBtn').addEventListener('click', () => {
+      vscode.postMessage({ command: 'browseConfigFile' });
+    });
+
+    // Run
+    document.getElementById('runBtn').addEventListener('click', () => {
+      const outputFile = document.getElementById('outputFileInput').value.trim();
+      const depthVal = document.getElementById('depthInput').value.trim();
       const extsRaw = document.getElementById('extensionsInput').value.trim();
       const exts = extsRaw ? extsRaw.split(/[,\\s]+/) : [];
 
@@ -584,16 +776,53 @@ function getRunPanelWebviewHTML(
       const ignoreErrors = document.getElementById('ignoreErrorsCheck').checked;
       const replaceInvalidChars = document.getElementById('replaceInvalidCheck').checked;
 
+      // Additional args
+      const formatsVal = document.getElementById('formatsInput').value.trim();
+      const configVal = document.getElementById('configInput').value.trim();
+      const forceBinary = document.getElementById('forceBinaryCheck').checked;
+
+      const metadataAddRaw = document.getElementById('metadataAddInput').value.trim();
+      const metadataAdd = metadataAddRaw ? metadataAddRaw.split(/[,\\s]+/) : [];
+
+      const metadataRemoveRaw = document.getElementById('metadataRemoveInput').value.trim();
+      const metadataRemove = metadataRemoveRaw ? metadataRemoveRaw.split(/[,\\s]+/) : [];
+
+      const excludeDirsRaw = document.getElementById('excludeDirsInput').value.trim();
+      const excludeDirs = excludeDirsRaw ? excludeDirsRaw.split(/[,\\s]+/) : [];
+
+      const excludeFilesRaw = document.getElementById('excludeFilesInput').value.trim();
+      const excludeFiles = excludeFilesRaw ? excludeFilesRaw.split(/[,\\s]+/) : [];
+
+      const includeDirsRaw = document.getElementById('includeDirsInput').value.trim();
+      const includeDirs = includeDirsRaw ? includeDirsRaw.split(/[,\\s]+/) : [];
+
+      const includeFilesRaw = document.getElementById('includeFilesInput').value.trim();
+      const includeFiles = includeFilesRaw ? includeFilesRaw.split(/[,\\s]+/) : [];
+
+      const disablePluginRaw = document.getElementById('disablePluginInput').value.trim();
+      const disablePlugin = disablePluginRaw ? disablePluginRaw.split(/[,\\s]+/) : [];
+
       vscode.postMessage({
         command: 'runSingleFile',
         data: {
+          outputFile,
           paths,
           depth: depthVal,
-          outputFile,
           extensions: exts,
           excludeExtensions: excludeExts,
           ignoreErrors,
-          replaceInvalidChars
+          replaceInvalidChars,
+
+          formats: formatsVal,
+          config: configVal,
+          forceBinaryContent: forceBinary,
+          metadataAdd,
+          metadataRemove,
+          excludeDirs,
+          excludeFiles,
+          includeDirs,
+          includeFiles,
+          disablePlugin
         }
       });
     });
@@ -604,6 +833,10 @@ function getRunPanelWebviewHTML(
       if (msg.command === 'addPath') {
         paths.push(msg.path);
         renderPathsList();
+      } else if (msg.command === 'setOutputFile') {
+        document.getElementById('outputFileInput').value = msg.value;
+      } else if (msg.command === 'setConfigFile') {
+        document.getElementById('configInput').value = msg.value;
       }
     });
   </script>
