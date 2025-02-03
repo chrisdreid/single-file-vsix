@@ -1,11 +1,13 @@
 {
-  "name": "single-file-vsix",
-  "displayName": "Single-File",
-  "description": "Flattens codebases using the Single File tool with full argument selection and pyenv support.",
+  "name": "single-file-flattener",
+  "displayName": "Single-File VSCode Flattener",
+  "description": "Flattens codebases using the Single-File tool with full argument selection and pyenv support.",
+  "publisher": "corsum",
   "version": "1.1.1",
   "engines": {
-    "vscode": "^1.96.0"
+    "vscode": "^1.66.0"
   },
+  "icon": "images/icon.png",
   "categories": [
     "Other"
   ],
@@ -13,22 +15,57 @@
   "contributes": {
     "commands": [
       { "command": "singlefile.run", "title": "Run Single-File" },
+      { "command": "singlefile.runLast", "title": "Run Single-File (with last settings)" },
       { "command": "singlefile.configureGlobalDefaults", "title": "Configure Single-File Global Defaults" }
     ],
+
+    "submenus": [
+      {
+        "id": "singleFileMenu",
+        "label": "Single-File"
+      }
+    ],
+
     "menus": {
       "commandPalette": [
-        { "command": "singlefile.run" },
-        { "command": "singlefile.configureGlobalDefaults" }
-      ],
-      "explorer/context": [
+        {
+          "command": "singlefile.configureGlobalDefaults",
+          "category": "Single-File",
+          "when": "true"
+        },
         {
           "command": "singlefile.run",
-          "group": "navigation",
+          "category": "Single-File",
+          "when": "true"
+        },
+        {
+          "command": "singlefile.runLast",
+          "category": "Single-File",
+          "when": "true"
+        }
+      ],
+
+      "explorer/context": [
+        {
+          "submenu": "singleFileMenu",
+          "when": "explorerResourceIsFolder || resourceFilename",
+          "group": "navigation"
+        }
+      ],
+
+      "singleFileMenu": [
+        {
+          "command": "singlefile.run",
+          "when": "explorerResourceIsFolder || resourceFilename"
+        },
+        {
+          "command": "singlefile.runLast",
           "when": "explorerResourceIsFolder || resourceFilename"
         }
       ]
     }
   },
+
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
@@ -38,7 +75,7 @@
     "test": "vscode-test"
   },
   "devDependencies": {
-    "@types/vscode": "^1.96.0",
+    "@types/vscode": "^1.66.0",
     "@types/node": "20.x",
     "typescript": "^5.7.2",
     "eslint": "^9.16.0",

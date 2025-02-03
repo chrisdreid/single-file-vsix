@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { execFile, ExecException, ExecFileException } from 'child_process';
-import * as fs from 'fs'; // For writing the config JSON file
+import { execFile, ExecFileException } from 'child_process';
+import * as fs from 'fs';
 
 /**
  * Data shape for global defaults (stored in globalState).
@@ -162,7 +162,7 @@ async function fetchQueryData(
     execFile(
       'python',
       args,
-      { env, encoding: 'utf8' }, // <-- set encoding so stdout/stderr are strings
+      { env, encoding: 'utf8' },
       (error: ExecFileException | null, stdout: string, stderr: string) => {
         if (error) {
           console.error('Error fetching query data:', error.message);
@@ -170,7 +170,6 @@ async function fetchQueryData(
           return;
         }
     
-        // Now stdout and stderr are properly typed as strings.
         try {
           const data = JSON.parse(stdout);
           resolve({
@@ -187,19 +186,16 @@ async function fetchQueryData(
 }
 
 /**
- * Build the environment object for spawning SingleFile. This sets:
+ * Build the environment object for spawning Single-File. This sets:
  *   - PYENV_VERSION (if any)
  *   - SINGLEFILE_CONFIG_PATH (joined from global configRoots, if any)
  */
 function buildSingleFileEnv(globals: SingleFileGlobalDefaults): NodeJS.ProcessEnv {
   const env = { ...process.env };
 
-  // If user has set a pyenv version
   if (globals.pyenvVersion) {
     env['PYENV_VERSION'] = globals.pyenvVersion;
   }
-
-  // If user has set configRoots, join them with the platform delimiter (: on Unix, ; on Windows)
   if (globals.configRoots && globals.configRoots.length > 0) {
     env['SINGLEFILE_CONFIG_PATH'] = globals.configRoots.join(path.delimiter);
   }
@@ -220,7 +216,7 @@ async function showGlobalConfigPanel(context: vscode.ExtensionContext) {
   // 2) Create webview
   const panel = vscode.window.createWebviewPanel(
     'singlefileConfig',
-    'Configure SingleFile Defaults',
+    'Configure Single-File Defaults',
     vscode.ViewColumn.One,
     { enableScripts: true, retainContextWhenHidden: true }
   );
@@ -264,7 +260,7 @@ async function showGlobalConfigPanel(context: vscode.ExtensionContext) {
         // The webview posts updated singleFileRoot, configRoots, and pyenvVersion
         const updated = msg.data as SingleFileGlobalDefaults;
         await setGlobalDefaults(context, updated);
-        vscode.window.showInformationMessage('SingleFile defaults saved.');
+        vscode.window.showInformationMessage('Single-File defaults saved.');
         panel.dispose();
         break;
       }
@@ -338,10 +334,10 @@ function getGlobalConfigWebviewHTML(
   </style>
 </head>
 <body>
-  <h2>SingleFile Global Defaults</h2>
+  <h2>Single-File Global Defaults</h2>
   
   <div class="row">
-    <label><strong>SingleFile Root (file or folder)</strong></label><br/>
+    <label><strong>Single-File Root (file or folder)</strong></label><br/>
     <input type="text" id="singleFileRoot" value="${escapeHtml(current.singleFileRoot)}" />
     <button id="browseRootBtn">Browse...</button>
   </div>
@@ -441,20 +437,27 @@ function getGlobalConfigWebviewHTML(
 }
 
 /**
- * Show a webview panel to let the user configure SingleFile arguments
- * and run SingleFile with the selected URIs from the Explorer (if any).
+ * Show a webview panel to let the user configure Single-File arguments
+ * and run Single-File with the selected URIs from the Explorer (if any).
  */
 async function showSingleFileRunPanel(
   context: vscode.ExtensionContext,
   selectedUris?: vscode.Uri[]
 ) {
-  // 1) Grab global defaults for the SingleFile path/pyenv usage
+  // 1) Grab global defaults
   const globals = getGlobalDefaults(context);
 
-  // 2) Load or create workspace defaults for the run fields
+  // If singleFileRoot not set, prompt them to configure
+  if (!globals.singleFileRoot) {
+    vscode.window.showInformationMessage('Please configure Single-File global defaults first.');
+    await showGlobalConfigPanel(context);
+    return;
+  }
+
+  // 2) Load or create workspace defaults
   const wsDefaults = getWorkspaceDefaults(context);
 
-  // 3) If the user invoked via right-click on files/folders, override the stored paths
+  // 3) If invoked via right-click on files/folders, override the stored paths
   if (selectedUris && selectedUris.length > 0) {
     wsDefaults.paths = selectedUris.map(u => u.fsPath);
   }
@@ -465,7 +468,7 @@ async function showSingleFileRunPanel(
   // 5) Create the panel
   const panel = vscode.window.createWebviewPanel(
     'singlefileRun',
-    'Run SingleFile',
+    'Run Single-File',
     vscode.ViewColumn.One,
     { enableScripts: true, retainContextWhenHidden: true }
   );
@@ -477,7 +480,6 @@ async function showSingleFileRunPanel(
   panel.webview.onDidReceiveMessage(async (message) => {
     switch (message.command) {
       case 'browseAddPath': {
-        // Let user add more files/folders to the paths list
         const chosen = await vscode.window.showOpenDialog({
           canSelectMany: true,
           canSelectFiles: true,
@@ -490,9 +492,7 @@ async function showSingleFileRunPanel(
         }
         break;
       }
-
       case 'browseOutputFile': {
-        // Let user pick (or create) an output file
         const chosen = await vscode.window.showSaveDialog({
           filters: { 'JSON Files': ['json'], All: ['*'] }
         });
@@ -504,9 +504,7 @@ async function showSingleFileRunPanel(
         }
         break;
       }
-
       case 'browseConfigFile': {
-        // Let user pick a config file
         const chosen = await vscode.window.showOpenDialog({
           canSelectMany: false,
           canSelectFiles: true,
@@ -520,22 +518,17 @@ async function showSingleFileRunPanel(
         }
         break;
       }
-
       case 'runSingleFile': {
-        // The user clicked the "Run" button in the webview
+        // The user clicked "Run"
         const args = message.data as SingleFileWorkspaceState;
-
-        // Save the new workspace defaults (sticky for next time).
+        // Save workspace defaults
         await setWorkspaceDefaults(context, args);
-
-        // Actually run SingleFile
+        // Actually run
         await runSingleFileCLI(globals, args);
-
-        vscode.window.showInformationMessage('SingleFile run completed.');
+        vscode.window.showInformationMessage('Single-File run completed.');
         panel.dispose();
         break;
       }
-
       case 'selectKnownConfig': {
         // The user selected a known config from the dropdown
         panel.webview.postMessage({
@@ -545,17 +538,15 @@ async function showSingleFileRunPanel(
         break;
       }
       case 'saveAsConfig': {
+        // The user clicked "Save As Config"
         const args = message.data as SingleFileWorkspaceState;
         
         const dest = await vscode.window.showSaveDialog({
           filters: { 'JSON Files': ['json'], All: ['*'] },
-          saveLabel: 'Save SingleFile Config'
+          saveLabel: 'Save Single-File Config'
         });
         
         if (dest) {
-          let configData: Record<string, any> = {};  // Initialize empty object
-          
-          // Create a type-safe mapping of workspace state to config
           const mapping: Record<string, keyof SingleFileWorkspaceState> = {
             paths: 'paths',
             depth: 'depth',
@@ -576,6 +567,7 @@ async function showSingleFileRunPanel(
             ignore_errors: 'ignoreErrors'
           };
 
+          const configData: Record<string, any> = {};
           for (const [configKey, stateKey] of Object.entries(mapping)) {
             const value = args[stateKey];
             if (value && (!Array.isArray(value) || value.length > 0)) {
@@ -593,12 +585,17 @@ async function showSingleFileRunPanel(
         }
         break;
       }
+      case 'openGitHubLink': {
+        // Opens the Single-File GitHub link in the default browser
+        vscode.env.openExternal(vscode.Uri.parse('https://github.com/chrisdreid/single-file'));
+        break;
+      }
     }
   });
 }
 
 /**
- * Actually spawns the SingleFile process using environment variables:
+ * Actually spawns the Single-File process using environment variables:
  *   - PYENV_VERSION (if user set it)
  *   - SINGLEFILE_CONFIG_PATH (from global configRoots)
  */
@@ -610,7 +607,6 @@ async function runSingleFileCLI(
     // 1) Decide on the single-file script to call
     let singleFileExe: string;
     if (!globals.singleFileRoot) {
-      // fallback to just "single-file" on PATH
       singleFileExe = 'single-file';
     } else {
       if (globals.singleFileRoot.endsWith('single-file')) {
@@ -620,124 +616,86 @@ async function runSingleFileCLI(
       }
     }
 
-    // 2) Build the argument array (no quotes—execFile handles splitting)
+    // 2) Build CLI arguments
     const cliArgs: string[] = [];
 
-    // --output-file
     if (args.outputFile) {
       cliArgs.push('--output-file', args.outputFile);
     }
-
-    // --paths
     if (args.paths && args.paths.length > 0) {
       cliArgs.push('--paths', ...args.paths);
     }
-
-    // --depth
     if (args.depth) {
       cliArgs.push('--depth', args.depth);
     }
-
-    // --extensions
     if (args.extensions && args.extensions.length > 0) {
       cliArgs.push('--extensions', ...args.extensions);
     }
-
-    // --exclude-extensions
     if (args.excludeExtensions && args.excludeExtensions.length > 0) {
       cliArgs.push('--exclude-extensions', ...args.excludeExtensions);
     }
-
-    // --ignore-errors
     if (args.ignoreErrors) {
       cliArgs.push('--ignore-errors');
     }
-
-    // --replace-invalid-chars
     if (args.replaceInvalidChars) {
       cliArgs.push('--replace-invalid-chars');
     }
-
-    // --formats
     if (args.formats) {
-      // user might have typed multiple separated by space or commas
       const cleaned = args.formats.replace(/\s+/g, ',');
       cliArgs.push('--formats', cleaned);
     }
-
-    // --config
     if (args.config) {
       cliArgs.push('--config', args.config);
     }
-
-    // --force-binary-content
     if (args.forceBinaryContent) {
       cliArgs.push('--force-binary-content');
     }
-
-    // --metadata-add
     if (args.metadataAdd && args.metadataAdd.length > 0) {
       cliArgs.push('--metadata-add', ...args.metadataAdd);
     }
-
-    // --metadata-remove
     if (args.metadataRemove && args.metadataRemove.length > 0) {
       cliArgs.push('--metadata-remove', ...args.metadataRemove);
     }
-
-    // --exclude-dirs
     if (args.excludeDirs && args.excludeDirs.length > 0) {
       cliArgs.push('--exclude-dirs', ...args.excludeDirs);
     }
-
-    // --exclude-files
     if (args.excludeFiles && args.excludeFiles.length > 0) {
       cliArgs.push('--exclude-files', ...args.excludeFiles);
     }
-
-    // --include-dirs
     if (args.includeDirs && args.includeDirs.length > 0) {
       cliArgs.push('--include-dirs', ...args.includeDirs);
     }
-
-    // --include-files
     if (args.includeFiles && args.includeFiles.length > 0) {
       cliArgs.push('--include-files', ...args.includeFiles);
     }
-
-    // --disable-plugin
     if (args.disablePlugin && args.disablePlugin.length > 0) {
       cliArgs.push('--disable-plugin', ...args.disablePlugin);
     }
 
-    // 3) Build environment for the child process
+    // 3) Environment
     const env = buildSingleFileEnv(globals);
 
-    // 4) We'll run "python singleFileExe ...args" with the environment
+    // 4) Command
     const pythonArgs = [singleFileExe, ...cliArgs];
+    const channel = vscode.window.createOutputChannel('Single-File');
+    channel.clear();
+    channel.show(true);
 
-    const outputChannel = vscode.window.createOutputChannel('SingleFile');
-    outputChannel.clear();
-    outputChannel.show(true);
-
-    // Log what we're about to do
-    outputChannel.appendLine(`Running SingleFile via:`);
-    outputChannel.appendLine(`  python ${pythonArgs.join(' ')}`);
-    outputChannel.appendLine(`with env: ${JSON.stringify(
-      {
+    channel.appendLine('Running Single-File via:');
+    channel.appendLine('  python ' + pythonArgs.join(' '));
+    channel.appendLine(
+      'with env: ' + JSON.stringify({
         PYENV_VERSION: env.PYENV_VERSION || '',
         SINGLEFILE_CONFIG_PATH: env.SINGLEFILE_CONFIG_PATH || ''
-      },
-      null,
-      2
-    )}\n`);
+      }, null, 2)
+    );
+    channel.appendLine('');
 
     execFile('python', pythonArgs, { env }, (error, stdout, stderr) => {
-      if (stdout) outputChannel.appendLine(stdout);
-      if (stderr) outputChannel.appendLine(stderr);
-
+      if (stdout) channel.appendLine(stdout);
+      if (stderr) channel.appendLine(stderr);
       if (error) {
-        vscode.window.showErrorMessage('SingleFile run failed: ' + error.message);
+        vscode.window.showErrorMessage('Single-File run failed: ' + error.message);
         return reject(error);
       }
       return resolve();
@@ -753,13 +711,12 @@ function getRunPanelWebviewHTML(
   formatsData: Record<string, any>,
   configsData: Array<{ path: string; file: string }>
 ): string {
-  // Prepare placeholders from the known format keys
   const formatKeys = Object.keys(formatsData);
   const formatsPlaceholder = formatKeys.length > 0
     ? `e.g. ${formatKeys.join(',')}`
     : 'e.g. default,json,markdown';
 
-  // Pre-fill input fields from wsDefaults
+  // Pre-fill inputs
   const escapedPaths = JSON.stringify(wsDefaults.paths.map(escapeHtml));
   const escapedOutputFile = escapeHtml(wsDefaults.outputFile);
   const escapedConfig = escapeHtml(wsDefaults.config);
@@ -775,7 +732,7 @@ function getRunPanelWebviewHTML(
   const escapedDisablePlugins = escapeHtml(wsDefaults.disablePlugin.join(','));
   const escapedDepth = escapeHtml(wsDefaults.depth);
 
-  // Build the known configs as a JSON array
+  // Known configs
   const knownConfigsJson = JSON.stringify(configsData.map(c => ({ path: c.path, file: c.file })));
 
   return /* html */ `
@@ -790,15 +747,16 @@ function getRunPanelWebviewHTML(
       background: var(--vscode-editor-background);
       margin: 0; padding: 16px;
     }
-    button {
+    button, a {
       background: var(--vscode-button-background);
       color: var(--vscode-button-foreground);
       border: none;
       padding: 6px 12px;
       cursor: pointer;
       margin-top: 8px;
+      text-decoration: none;
     }
-    button:hover {
+    button:hover, a:hover {
       background: var(--vscode-button-hoverBackground);
     }
     input[type="text"], select {
@@ -837,10 +795,16 @@ function getRunPanelWebviewHTML(
       align-items: center;
       gap: 8px;
     }
+    a.link-btn {
+      font-size: 0.9em;
+      padding: 6px 10px;
+      display: inline-flex;
+      align-items: center;
+    }
   </style>
 </head>
 <body>
-  <h2>Run SingleFile</h2>
+  <h2>Run Single-File</h2>
 
   <div class="row">
     <label>Output File</label><br/>
@@ -941,6 +905,7 @@ function getRunPanelWebviewHTML(
 
   <!-- Buttons Row -->
   <div class="row inline-right">
+    <a href="#" class="link-btn" id="githubLink">GitHub</a>
     <button id="saveAsConfigBtn">Save As Config</button>
     <button id="runBtn">Run</button>
   </div>
@@ -997,8 +962,11 @@ function getRunPanelWebviewHTML(
     document.getElementById('browseConfigBtn').addEventListener('click', () => {
       vscode.postMessage({ command: 'browseConfigFile' });
     });
+    document.getElementById('githubLink').addEventListener('click', (evt) => {
+      evt.preventDefault();
+      vscode.postMessage({ command: 'openGitHubLink' });
+    });
 
-    // "Save As Config" button
     document.getElementById('saveAsConfigBtn').addEventListener('click', () => {
       const currentSettings = collectSettings();
       vscode.postMessage({
@@ -1007,7 +975,6 @@ function getRunPanelWebviewHTML(
       });
     });
 
-    // "Run" button
     document.getElementById('runBtn').addEventListener('click', () => {
       const currentSettings = collectSettings();
       vscode.postMessage({
@@ -1108,32 +1075,39 @@ function escapeHtml(str: string): string {
  * The main entry point for your extension's activation.
  */
 export function activate(context: vscode.ExtensionContext) {
-  // 1) Command: singlefile.configureGlobalDefaults
-  const cmdConfig = vscode.commands.registerCommand(
-    'singlefile.configureGlobalDefaults',
-    () => {
-      showGlobalConfigPanel(context);
-    }
-  );
+  // Command: singlefile.configureGlobalDefaults
+  const cmdConfig = vscode.commands.registerCommand('singlefile.configureGlobalDefaults', () => {
+    showGlobalConfigPanel(context);
+  });
   context.subscriptions.push(cmdConfig);
 
-  // 2) Command: singlefile.run
-  const cmdRun = vscode.commands.registerCommand(
-    'singlefile.run',
-    (uri: vscode.Uri, uris: vscode.Uri[]) => {
-      // If invoked from Explorer with multiple selection, "uris" is an array.
-      // If invoked from Command Palette, "uris" may be undefined. 
-      // If only one item is selected, "uri" is set (and "uris" might be empty).
-      let selected: vscode.Uri[] | undefined;
-      if (uris && uris.length > 0) {
-        selected = uris;
-      } else if (uri) {
-        selected = [uri];
-      }
-      showSingleFileRunPanel(context, selected);
+  // Command: singlefile.run (opens the Run dialog)
+  const cmdRun = vscode.commands.registerCommand('singlefile.run', (uri: vscode.Uri, uris: vscode.Uri[]) => {
+    let selected: vscode.Uri[] | undefined;
+    if (uris && uris.length > 0) {
+      selected = uris;
+    } else if (uri) {
+      selected = [uri];
     }
-  );
+    showSingleFileRunPanel(context, selected);
+  });
   context.subscriptions.push(cmdRun);
+
+  // Command: singlefile.runLast (runs immediately with last settings)
+  const cmdRunLast = vscode.commands.registerCommand('singlefile.runLast', async () => {
+    const globals = getGlobalDefaults(context);
+    if (!globals.singleFileRoot) {
+      vscode.window.showInformationMessage('Please configure Single-File global defaults first.');
+      await showGlobalConfigPanel(context);
+      return;
+    }
+
+    // Use last workspace defaults exactly, do not override paths
+    const wsDefaults = getWorkspaceDefaults(context);
+    await runSingleFileCLI(globals, wsDefaults);
+    vscode.window.showInformationMessage('Single-File (Last Settings) run started.');
+  });
+  context.subscriptions.push(cmdRunLast);
 }
 
 /**
