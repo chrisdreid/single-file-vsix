@@ -8,8 +8,26 @@
     "vscode": "^1.66.0"
   },
   "icon": "images/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chrisdreid/single-file-vsix.git"
+  },
+  "homepage": "https://github.com/chrisdreid/single-file-vsix/blob/main/README.md",
+  "bugs": {
+    "url": "https://github.com/chrisdreid/single-file-vsix/issues"
+  },
+  "markdown": "github",
+  "galleryBanner": {
+    "color": "#007ACC",
+    "theme": "dark"
+  },
   "categories": [
     "Other"
+  ],
+  "activationEvents": [
+    "onCommand:singlefile.run",
+    "onCommand:singlefile.runLast",
+    "onCommand:singlefile.configureGlobalDefaults"
   ],
   "main": "./out/extension.js",
   "contributes": {
