@@ -1,10 +1,11 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { exec, ExecException } from 'child_process';
+import { execFile, ExecException, ExecFileException } from 'child_process';
+
+
 
 /**
  * Data shape for global defaults (stored in globalState).
- * - Per-user or machine (not project specific).
  */
 interface SingleFileGlobalDefaults {
   singleFileRoot: string;   // Path to SingleFile (file or folder)
@@ -14,7 +15,6 @@ interface SingleFileGlobalDefaults {
 
 /**
  * Data shape for per-project "Run" settings (stored in workspaceState).
- * These values are "sticky" within the current workspace.
  */
 interface SingleFileWorkspaceState {
   outputFile: string;
@@ -115,7 +115,7 @@ async function setWorkspaceDefaults(
  */
 async function fetchPyenvVersions(): Promise<string[]> {
   return new Promise<string[]>((resolve) => {
-    exec('pyenv versions --bare', (error: ExecException | null, stdout: string) => {
+    execFile('pyenv', ['versions', '--bare'], (error, stdout) => {
       if (error) {
         console.error('Failed to run "pyenv versions --bare":', error.message);
         // Return empty array so we don't crash
@@ -131,14 +131,14 @@ async function fetchPyenvVersions(): Promise<string[]> {
 }
 
 /**
- * Query single-file for available formats and configs.
+ * Query single-file for available formats and configs, respecting SINGLEFILE_CONFIG_PATH + PYENV_VERSION.
  * E.g. `python single-file --query formats configs`
  */
 async function fetchQueryData(
   globals: SingleFileGlobalDefaults
 ): Promise<{ formats: Record<string, any>; configs: Array<{ path: string; file: string }> }> {
   return new Promise((resolve) => {
-    // Construct command using the same approach for pyenvVersion and singleFileRoot
+    // Determine the singleFileExe path
     let singleFileExe: string;
     if (!globals.singleFileRoot) {
       // fallback to just "single-file" on PATH
@@ -146,36 +146,66 @@ async function fetchQueryData(
     } else {
       // user might have set it to a file or folder
       if (globals.singleFileRoot.endsWith('single-file')) {
-        singleFileExe = `"${globals.singleFileRoot}"`;
+        // remove any wrapping quotes if present
+        singleFileExe = globals.singleFileRoot.replace(/^"(.*)"$/, '$1');
       } else {
-        singleFileExe = `"${path.join(globals.singleFileRoot, 'single-file')}"`;
+        singleFileExe = path.join(globals.singleFileRoot, 'single-file');
       }
     }
 
-    let cmd: string;
-    if (globals.pyenvVersion) {
-      cmd = `PYENV_VERSION=${globals.pyenvVersion} python ${singleFileExe} --query formats configs`;
-    } else {
-      cmd = `python ${singleFileExe} --query formats configs`;
-    }
+    // Build environment
+    const env = buildSingleFileEnv(globals);
 
-    exec(cmd, (error, stdout) => {
-      if (error) {
-        console.error('Error fetching query data:', error.message);
-        return resolve({ formats: {}, configs: [] });
+    // We'll execFile python <singleFileExe> --query formats configs
+    // because singleFileExe might be a script to pass to python.
+    const args = [singleFileExe, '--query', 'formats', 'configs'];
+
+    execFile(
+      'python',
+      args,
+      { env, encoding: 'utf8' }, // <-- set encoding so stdout/stderr are strings
+      (error: ExecFileException | null, stdout: string, stderr: string) => {
+        if (error) {
+          console.error('Error fetching query data:', error.message);
+          resolve({ formats: {}, configs: [] });
+          return;
+        }
+    
+        // Now stdout and stderr are properly typed as strings.
+        try {
+          const data = JSON.parse(stdout);
+          resolve({
+            formats: data.formats || {},
+            configs: data.configs || [],
+          });
+        } catch (parseErr) {
+          console.error('Error parsing query data:', parseErr);
+          resolve({ formats: {}, configs: [] });
+        }
       }
-      try {
-        const data = JSON.parse(stdout);
-        resolve({
-          formats: data.formats || {},
-          configs: data.configs || []
-        });
-      } catch (parseErr) {
-        console.error('Error parsing query data:', parseErr);
-        return resolve({ formats: {}, configs: [] });
-      }
-    });
+    );
   });
+}
+
+/**
+ * Build the environment object for spawning SingleFile. This sets:
+ *   - PYENV_VERSION (if any)
+ *   - SINGLEFILE_CONFIG_PATH (joined from global configRoots, if any)
+ */
+function buildSingleFileEnv(globals: SingleFileGlobalDefaults): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+
+  // If user has set a pyenv version
+  if (globals.pyenvVersion) {
+    env['PYENV_VERSION'] = globals.pyenvVersion;
+  }
+
+  // If user has set configRoots, join them with the platform delimiter (: on Unix, ; on Windows)
+  if (globals.configRoots && globals.configRoots.length > 0) {
+    env['SINGLEFILE_CONFIG_PATH'] = globals.configRoots.join(path.delimiter);
+  }
+
+  return env;
 }
 
 /**
@@ -500,7 +530,7 @@ async function showSingleFileRunPanel(
         await setWorkspaceDefaults(context, args);
 
         // Actually run SingleFile
-        await runSingleFileCLI(context, globals, args);
+        await runSingleFileCLI(globals, args);
 
         vscode.window.showInformationMessage('SingleFile run completed.');
         panel.dispose();
@@ -520,10 +550,11 @@ async function showSingleFileRunPanel(
 }
 
 /**
- * Actually spawns the SingleFile process using your original PYENV logic.
+ * Actually spawns the SingleFile process using environment variables:
+ *   - PYENV_VERSION (if user set it)
+ *   - SINGLEFILE_CONFIG_PATH (from global configRoots)
  */
 async function runSingleFileCLI(
-  context: vscode.ExtensionContext,
   globals: SingleFileGlobalDefaults,
   args: SingleFileWorkspaceState
 ): Promise<void> {
@@ -535,23 +566,23 @@ async function runSingleFileCLI(
       singleFileExe = 'single-file';
     } else {
       if (globals.singleFileRoot.endsWith('single-file')) {
-        singleFileExe = `"${globals.singleFileRoot}"`;
+        singleFileExe = globals.singleFileRoot.replace(/^"(.*)"$/, '$1');
       } else {
-        singleFileExe = `"${path.join(globals.singleFileRoot, 'single-file')}"`;
+        singleFileExe = path.join(globals.singleFileRoot, 'single-file');
       }
     }
 
-    // 2) Build CLI arguments
+    // 2) Build the argument array (no quotes—execFile handles splitting)
     const cliArgs: string[] = [];
 
     // --output-file
     if (args.outputFile) {
-      cliArgs.push('--output-file', `"${args.outputFile}"`);
+      cliArgs.push('--output-file', args.outputFile);
     }
 
     // --paths
     if (args.paths && args.paths.length > 0) {
-      cliArgs.push('--paths', ...args.paths.map((p) => `"${p}"`));
+      cliArgs.push('--paths', ...args.paths);
     }
 
     // --depth
@@ -588,7 +619,7 @@ async function runSingleFileCLI(
 
     // --config
     if (args.config) {
-      cliArgs.push('--config', `"${args.config}"`);
+      cliArgs.push('--config', args.config);
     }
 
     // --force-binary-content
@@ -631,26 +662,31 @@ async function runSingleFileCLI(
       cliArgs.push('--disable-plugin', ...args.disablePlugin);
     }
 
-    // 3) Construct final command
-    let cmd: string;
-    if (globals.pyenvVersion) {
-      cmd = `PYENV_VERSION=${globals.pyenvVersion} python ${singleFileExe} ${cliArgs.join(' ')}`;
-    } else {
-      cmd = `python ${singleFileExe} ${cliArgs.join(' ')}`;
-    }
+    // 3) Build environment for the child process
+    const env = buildSingleFileEnv(globals);
 
-    console.log('CMD:', cmd);
+    // 4) We'll run "python singleFileExe ...args" with the environment
+    const pythonArgs = [singleFileExe, ...cliArgs];
 
-    // 4) Output channel for logs
-    const singleFileChannel = vscode.window.createOutputChannel('SingleFile');
-    singleFileChannel.clear();
-    singleFileChannel.show(true);
-    singleFileChannel.appendLine(`CMD: ${cmd}`);
+    const outputChannel = vscode.window.createOutputChannel('SingleFile');
+    outputChannel.clear();
+    outputChannel.show(true);
 
-    // 5) Execute
-    exec(cmd, (error, stdout, stderr) => {
-      if (stdout) singleFileChannel.appendLine(stdout);
-      if (stderr) singleFileChannel.appendLine(stderr);
+    // Log what we're about to do
+    outputChannel.appendLine(`Running SingleFile via:`);
+    outputChannel.appendLine(`  python ${pythonArgs.join(' ')}`);
+    outputChannel.appendLine(`with env: ${JSON.stringify(
+      {
+        PYENV_VERSION: env.PYENV_VERSION || '',
+        SINGLEFILE_CONFIG_PATH: env.SINGLEFILE_CONFIG_PATH || ''
+      },
+      null,
+      2
+    )}\n`);
+
+    execFile('python', pythonArgs, { env }, (error, stdout, stderr) => {
+      if (stdout) outputChannel.appendLine(stdout);
+      if (stderr) outputChannel.appendLine(stderr);
 
       if (error) {
         vscode.window.showErrorMessage('SingleFile run failed: ' + error.message);
@@ -663,9 +699,6 @@ async function runSingleFileCLI(
 
 /**
  * Build the HTML for the Run Panel webview.
- * Now includes:
- *  - A dropdown for known config files
- *  - A placeholder in the "formats" input derived from the query data
  */
 function getRunPanelWebviewHTML(
   wsDefaults: SingleFileWorkspaceState,
@@ -755,7 +788,6 @@ function getRunPanelWebviewHTML(
 <body>
   <h2>Run SingleFile</h2>
 
-  <!-- Output File at the top, with a "Browse..." button for showSaveDialog -->
   <div class="row">
     <label>Output File</label><br/>
     <div class="inline-group">
@@ -895,22 +927,16 @@ function getRunPanelWebviewHTML(
       });
     });
 
-    // Browse for paths
     document.getElementById('browsePathBtn').addEventListener('click', () => {
       vscode.postMessage({ command: 'browseAddPath' });
     });
-
-    // Browse for output file
     document.getElementById('browseOutputFileBtn').addEventListener('click', () => {
       vscode.postMessage({ command: 'browseOutputFile' });
     });
-
-    // Browse for config file
     document.getElementById('browseConfigBtn').addEventListener('click', () => {
       vscode.postMessage({ command: 'browseConfigFile' });
     });
 
-    // Run
     document.getElementById('runBtn').addEventListener('click', () => {
       const outputFile = document.getElementById('outputFileInput').value.trim();
       const depthVal = document.getElementById('depthInput').value.trim();
@@ -1016,13 +1042,12 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(cmdConfig);
 
   // 2) Command: singlefile.run
-  //    - If invoked from Explorer context menu with multiple selected items, the “uris” param is an array.
-  //    - If invoked from Command Palette (or with no selection), we pass undefined or a single URI.
   const cmdRun = vscode.commands.registerCommand(
     'singlefile.run',
     (uri: vscode.Uri, uris: vscode.Uri[]) => {
-      // If we have multiple selected URIs, use them; otherwise if there's a single one, use that; 
-      // or if none, pass undefined so we keep the last used paths from workspaceState.
+      // If invoked from Explorer with multiple selection, "uris" is an array.
+      // If invoked from Command Palette, "uris" may be undefined. 
+      // If only one item is selected, "uri" is set (and "uris" might be empty).
       let selected: vscode.Uri[] | undefined;
       if (uris && uris.length > 0) {
         selected = uris;
