@@ -1,8 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { execFile, ExecException, ExecFileException } from 'child_process';
-
-
+import * as fs from 'fs'; // For writing the config JSON file
 
 /**
  * Data shape for global defaults (stored in globalState).
@@ -48,7 +47,7 @@ function getFallbackGlobalDefaults(): SingleFileGlobalDefaults {
 }
 
 /**
- * Get the global defaults from the extension’s globalState storage.
+ * Get the global defaults from the extension's globalState storage.
  */
 function getGlobalDefaults(context: vscode.ExtensionContext): SingleFileGlobalDefaults {
   return context.globalState.get<SingleFileGlobalDefaults>(
@@ -545,6 +544,55 @@ async function showSingleFileRunPanel(
         });
         break;
       }
+      case 'saveAsConfig': {
+        const args = message.data as SingleFileWorkspaceState;
+        
+        const dest = await vscode.window.showSaveDialog({
+          filters: { 'JSON Files': ['json'], All: ['*'] },
+          saveLabel: 'Save SingleFile Config'
+        });
+        
+        if (dest) {
+          let configData: Record<string, any> = {};  // Initialize empty object
+          
+          // Create a type-safe mapping of workspace state to config
+          const mapping: Record<string, keyof SingleFileWorkspaceState> = {
+            paths: 'paths',
+            depth: 'depth',
+            output_file: 'outputFile',
+            formats: 'formats',
+            extensions: 'extensions',
+            exclude_extensions: 'excludeExtensions',
+            exclude_dirs: 'excludeDirs',
+            exclude_files: 'excludeFiles',
+            include_dirs: 'includeDirs',
+            include_files: 'includeFiles',
+            metadata_add: 'metadataAdd',
+            metadata_remove: 'metadataRemove',
+            config: 'config',
+            disable_plugin: 'disablePlugin',
+            replace_invalid_chars: 'replaceInvalidChars',
+            force_binary_content: 'forceBinaryContent',
+            ignore_errors: 'ignoreErrors'
+          };
+
+          for (const [configKey, stateKey] of Object.entries(mapping)) {
+            const value = args[stateKey];
+            if (value && (!Array.isArray(value) || value.length > 0)) {
+              configData[configKey] = value;
+            }
+          }
+          
+          try {
+            const jsonData = JSON.stringify(configData, null, 2);
+            await fs.promises.writeFile(dest.fsPath, jsonData, 'utf8');
+            vscode.window.showInformationMessage(`Saved config to: ${dest.fsPath}`);
+          } catch (err: any) {
+            vscode.window.showErrorMessage('Failed to save config: ' + err.message);
+          }
+        }
+        break;
+      }
     }
   });
 }
@@ -783,6 +831,12 @@ function getRunPanelWebviewHTML(
       gap: 8px;
       align-items: center;
     }
+    .inline-right {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 8px;
+    }
   </style>
 </head>
 <body>
@@ -799,7 +853,10 @@ function getRunPanelWebviewHTML(
   <div class="row">
     <label>Paths</label><br/>
     <div id="pathsList"></div>
-    <button id="browsePathBtn">Browse...</button>
+    <div class="inline-right">
+      <span>Click to add files/directories</span>
+      <button id="browsePathBtn">Browse...</button>
+    </div>
   </div>
 
   <div class="row">
@@ -882,7 +939,11 @@ function getRunPanelWebviewHTML(
     <input type="checkbox" id="replaceInvalidCheck" ${wsDefaults.replaceInvalidChars ? 'checked' : ''}/> Replace Invalid Chars<br/>
   </div>
 
-  <button id="runBtn">Run</button>
+  <!-- Buttons Row -->
+  <div class="row inline-right">
+    <button id="saveAsConfigBtn">Save As Config</button>
+    <button id="runBtn">Run</button>
+  </div>
 
   <script>
     const vscode = acquireVsCodeApi();
@@ -937,7 +998,25 @@ function getRunPanelWebviewHTML(
       vscode.postMessage({ command: 'browseConfigFile' });
     });
 
+    // "Save As Config" button
+    document.getElementById('saveAsConfigBtn').addEventListener('click', () => {
+      const currentSettings = collectSettings();
+      vscode.postMessage({
+        command: 'saveAsConfig',
+        data: currentSettings
+      });
+    });
+
+    // "Run" button
     document.getElementById('runBtn').addEventListener('click', () => {
+      const currentSettings = collectSettings();
+      vscode.postMessage({
+        command: 'runSingleFile',
+        data: currentSettings
+      });
+    });
+
+    function collectSettings() {
       const outputFile = document.getElementById('outputFileInput').value.trim();
       const depthVal = document.getElementById('depthInput').value.trim();
       const extsRaw = document.getElementById('extensionsInput').value.trim();
@@ -974,29 +1053,26 @@ function getRunPanelWebviewHTML(
       const disablePluginRaw = document.getElementById('disablePluginInput').value.trim();
       const disablePlugin = disablePluginRaw ? disablePluginRaw.split(/[,\\s]+/) : [];
 
-      vscode.postMessage({
-        command: 'runSingleFile',
-        data: {
-          outputFile,
-          paths,
-          config: configVal,
-          extensions: exts,
-          excludeExtensions: excludeExts,
-          ignoreErrors,
-          replaceInvalidChars,
-          formats: formatsVal,
-          forceBinaryContent: forceBinary,
-          metadataAdd,
-          metadataRemove,
-          excludeDirs,
-          excludeFiles,
-          includeDirs,
-          includeFiles,
-          disablePlugin,
-          depth: depthVal
-        }
-      });
-    });
+      return {
+        outputFile,
+        paths,
+        config: configVal,
+        extensions: exts,
+        excludeExtensions: excludeExts,
+        ignoreErrors,
+        replaceInvalidChars,
+        formats: formatsVal,
+        forceBinaryContent: forceBinary,
+        metadataAdd,
+        metadataRemove,
+        excludeDirs,
+        excludeFiles,
+        includeDirs,
+        includeFiles,
+        disablePlugin,
+        depth: depthVal
+      };
+    }
 
     // Listen for extension -> webview messages
     window.addEventListener('message', (evt) => {
