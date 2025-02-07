@@ -3,7 +3,7 @@
 
 # Single-File VSCode Extension
 
-**Transform your codebase into LLM-friendly formats directly from Visual Studio Code.** This extension leverages [Single-File CLI](https://github.com/chrisdreid/single-file) under the hood to create optimized, context-aware representations of your code that are perfect for AI analysis and prompting. This extension provides a user-friendly interface to configure paths, arguments, metadata options, pyenv versions, and more—right inside VS Code.
+**Transform your codebase into LLM-friendly formats directly from Visual Studio Code.** This extension leverages [Single-File](https://github.com/chrisdreid/single-file) CLI under the hood to create optimized, context-aware representations of your code that are perfect for AI analysis and prompting. This extension provides a user-friendly interface to configure paths, arguments, metadata options, pyenv versions, and more—right inside VS Code.
 
 ### LLM Tuned - Smart Context Preservation
 - Automatically maintains crucial relationships between files and dependencies.
