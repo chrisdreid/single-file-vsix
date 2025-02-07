@@ -26,7 +26,7 @@
 ## Requirements
 
 1. **[Python 3.x](https://www.python.org/downloads/)**
-2. The **[Single-File CLI](https://github.com/chrisdreid/single-file)** installed (or placed in your configured `singleFileRoot`).
+2. The **[Single-File](https://github.com/chrisdreid/single-file)** CLI installed (or placed in your configured `singleFileRoot`).
 3. *(Optional)* **[pyenv](https://github.com/pyenv/pyenv)** if you wish to specify a particular Python version inside VS Code.
 3. *(Coming Soon)* **venv** if you wish to specify a particular Python virtual environment.
 
@@ -34,12 +34,12 @@
 
 ## Limitations 
 
-1. **Cursor.ai** Context menus are not working. So use **[CTRL+SHFT + P]** to launch.
+1. [FIXED] **Cursor.ai** Context menus are not working. So use **[CTRL+SHFT + P]** to launch.
 
 ## Installation
 
 1. **Install** or **Enable** the extension (from the VS Code Marketplace or by manual `.vsix` file).
-2. Ensure that you have the **Single-File** CLI on your system or configured in the extension’s `single-file`  (singleFileRoot).
+2. Ensure that you have the **[Single-File](https://github.com/chrisdreid/single-file)** CLI on your system or configured in the extension’s `single-file`  (singleFileRoot).
 
 ### Configure Global Defaults (Optional)
 
@@ -71,7 +71,8 @@ If you want a custom Single-File root or a specific Python version (via pyenv):
 
 ## Troubleshooting
 
-- **Global Defaults Not Set**: If you haven’t configured `singleFileRoot`, the extension will prompt you on first use. Make sure Single-File is installed or accessible at the path you configure.
+- **Global Defaults Not Set**: If you haven’t configured `singleFileRoot`, the extension will prompt you on first use. Make sure Single-File is installed or accessible at the path you configure. **You should set your singleFileRoot to the repo directory on your local system.** 
+ - - Example: **'/home/< username >/dev/single-file'** 
 - **Check Output Logs**: Go to `View → Output` in VS Code, then select **Single-File** in the dropdown. This log may show errors about missing paths, invalid arguments, or Python environment issues.
 - **Pyenv**: If you specify a `pyenvVersion`, ensure that version is installed via pyenv (and accessible on your system).
 
@@ -99,5 +100,5 @@ To dive deeper:
 
 ## License
 
-This extension is provided under the **MIT License**, the same as the [Single-File CLI](https://github.com/chrisdreid/single-file/blob/main/LICENSE).  
-Feel free to modify and distribute—credit is welcome but not required.
+This extension is provided under the **MIT License**, the same as the [Single-File](https://github.com/chrisdreid/single-file/blob/main/LICENSE) CLI.  
+Feel free to modify and distribute with respect to the Attribution Requirement.
