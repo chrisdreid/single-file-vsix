@@ -1,7 +1,7 @@
 
 ![Banner](./images/banner.png)
 
-# Single-File VSCode Extension
+# Single-File VSCode Extension [[Code2LLM](https://marketplace.visualstudio.com/items?itemName=corsum.code2llm)]
 
 **Transform your codebase into LLM-friendly formats directly from Visual Studio Code.** This extension leverages [Single-File](https://github.com/chrisdreid/single-file) CLI under the hood to create optimized, context-aware representations of your code that are perfect for AI analysis and prompting. This extension provides a user-friendly interface to configure paths, arguments, metadata options, pyenv versions, and more—right inside VS Code.
 
@@ -11,6 +11,10 @@
 - Includes relevant metadata and hints that help LLMs understand your code better.
 <br>
 
+
+---
+
+Link to Published Extension: [Code2LLM](https://marketplace.visualstudio.com/items?itemName=corsum.code2llm)
 ## Features
 
 - **Global Defaults**: Configure your Single-File path, optional Pyenv version, and any additional config root paths.  
